@@ -1,0 +1,110 @@
+pipeline {
+    agent any
+environment {
+        NEXUS_VERSION = "nexus3"
+        NEXUS_PROTOCOL = "http"
+        NEXUS_URL = "localhost:8081/"
+        NEXUS_REPOSITORY = "Project-Repo"
+        NEXUS_CREDENTIAL_ID = "nexus"
+       }
+    stages {
+        stage ("Git checkout "){
+            steps{
+            cleanWs()
+            git branch: 'Project',
+            credentialsId: 'github',
+            url: 'https://github.com/takwasfaxi/ProjetBackPFE.git'
+            }
+         }
+        stage('compile') {  
+            steps {
+                
+                sh "mvn compile"
+            }
+        }
+        stage('UnitTest') {
+            steps {
+                sh "mvn test -DskipTests=true"
+                
+            }
+        }
+        stage('Sonar Test') {
+            
+            steps {
+             withSonarQubeEnv(credentialsId: 'sonar',installationName: 'sonar') {
+		     sh 'mvn sonar:sonar -Dsonar.projectKey=BackenService '
+                 }
+             }
+        
+    }
+    stage('Integration test') {
+            
+            steps {
+             sh "mvn verify -DskipTests=true"
+             }
+        
+    }
+    stage('Build Project') {
+            
+            steps {
+             sh "mvn clean install -DskipTests=true "
+             }
+        
+    }
+
+     stage('Nexus Uploader ') {
+             steps {
+                script {
+                    pom = readMavenPom file: "pom.xml";
+                    filesByGlob = findFiles(glob: "target/*.${pom.packaging}");
+                    echo "${filesByGlob[0].name} ${filesByGlob[0].path} ${filesByGlob[0].directory} ${filesByGlob[0].length} ${filesByGlob[0].lastModified}"
+                    artifactPath = filesByGlob[0].path;
+                    artifactExists = fileExists artifactPath;
+                    if(artifactExists) {
+                        echo "*** File: ${artifactPath}, group: ${pom.groupId}, packaging: ${pom.packaging}, version ${pom.version}";
+                        nexusArtifactUploader(
+                            nexusVersion: NEXUS_VERSION,
+                            protocol: NEXUS_PROTOCOL,
+                            nexusUrl: NEXUS_URL,
+                            groupId: pom.groupId,
+                            version: pom.version,
+                            repository: NEXUS_REPOSITORY,
+                            credentialsId: NEXUS_CREDENTIAL_ID,
+                            artifacts: [
+                                [artifactId: pom.artifactId,
+                                classifier: '',
+                                file: artifactPath,
+                                type: pom.packaging],
+                                [artifactId: pom.artifactId,
+                                classifier: '',
+                                file: "pom.xml",
+                                type: "pom"]
+                            ]
+                        );
+                    } else {
+                        error "*** File: ${artifactPath}, could not be found";
+                    }
+                }
+        }
+        }
+
+
+
+        stage('Build Docker Image') {
+            
+            steps {
+             sh "docker build -t projetservice:1.0.$BUILD_NUMBER . "
+             }
+        
+    }
+    stage('Deploy our image') {
+            steps {
+               script{
+
+                  withDockerRegistry([credentialsId:"dockerhub", url:""]){
+                    sh "docker tag projetservice:1.0.$BUILD_NUMBER takwaa123/projetservice:$BUILD_NUMBER "
+                    sh "docker push takwaa123/projetservice:$BUILD_NUMBER"
+               }
+       }
+}
+}}}
